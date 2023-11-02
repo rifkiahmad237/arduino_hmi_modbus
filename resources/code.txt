@@ -1,0 +1,87 @@
+#include <Arduino.h>
+#include <DHT.h>
+#include <DHT_U.h>
+#include <ModbusRtu.h>
+
+#define MAX_ADC_READING 1023
+#define ADC_REF_VOLTAGE 5.0
+#define REF_RESISTANCE 10000
+#define LUX_CALC_SCALAR 125235178.3654270
+#define LUX_CALC_EXPONENT -1.604568157
+#define ID 1
+
+Modbus slave(ID, 0, 0);
+DHT dht(8, DHT11);
+int8_t state = 0;
+uint16_t data[5];
+const int led_pin = 7;
+const int motor_pin = 9;
+const int heat_pin = 10;
+const int ldr_pin = A0;
+int ldrRawData;
+float resistorVoltage, ldrVoltage;
+float ldrResistance;
+float ldrLux;
+float suhu;
+
+void setup()
+{
+    slave.begin(9600);
+    pinMode(motor_pin, OUTPUT);
+    pinMode(heat_pin, OUTPUT);
+    pinMode(led_pin, OUTPUT);
+    dht.begin();
+}
+
+void loop()
+{
+    state = slave.poll(data, 5);
+    readDataSensor();
+    int mode = bitRead(data[0], 1);
+    if (mode == 1) {
+        auto_mode();
+    } else {
+        manual_mode();
+    }
+}
+
+void readDataSensor()
+{
+    suhu = dht.readTemperature();
+    data[1] = suhu;
+    ldrRawData = analogRead(ldr_pin);
+    resistorVoltage = (float)ldrRawData / MAX_ADC_READING * ADC_REF_VOLTAGE;
+    ldrVoltage = ADC_REF_VOLTAGE - resistorVoltage;
+    ldrResistance = ldrVoltage / resistorVoltage * REF_RESISTANCE;
+    ldrLux = LUX_CALC_SCALAR * pow(ldrResistance, LUX_CALC_EXPONENT);
+    data[2] = ldrLux;
+}
+
+void auto_mode()
+{
+    if (suhu <= 25) {
+        data[3] = 0;
+        data[4] = 255;
+        digitalWrite(motor_pin, LOW);
+        digitalWrite(heat_pin, HIGH);
+    } else if (suhu >= 37) {
+        data[3] = 255;
+        data[4] = 0;
+        digitalWrite(motor_pin, HIGH);
+        digitalWrite(heat_pin, LOW);
+    }
+    if (ldrLux <= 70) {
+        digitalWrite(led_pin, HIGH);
+        bitWrite(data[0], 0, 1);
+    } else {
+        digitalWrite(led_pin, LOW);
+        bitWrite(data[0], 0, 0);
+    }
+}
+
+void manual_mode()
+{
+    digitalWrite(led_pin, bitRead(data[0], 0));
+    analogWrite(motor_pin, data[3]);
+    analogWrite(heat_pin, data[4]);
+}
